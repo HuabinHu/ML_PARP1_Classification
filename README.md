@@ -1,4 +1,4 @@
-# Random Forest QSAR Classification Model
+# Random Forest PARP1 Classification Model
 
 The code employs the Random Forest (RF) algorithm to predict the activity class of small molecules based on their molecular structures represented by SMILES strings.
 
