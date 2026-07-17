@@ -18,155 +18,155 @@
 # ============================
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from rdkit import Chem, DataStructs
-from rdkit.Chem import rdFingerprintGenerator
-# Machine learning
+from tqdm.notebook import tqdm
+# Machine Learning & Evaluation
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import (
-    train_test_split,
-    StratifiedKFold,
-    GridSearchCV
-)
-# Evaluation metrics
+from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV
 from sklearn.metrics import (
-    matthews_corrcoef,
-    confusion_matrix,
-    roc_auc_score,
-    roc_curve,
-    balanced_accuracy_score,
+    matthews_corrcoef, 
+    confusion_matrix, 
+    roc_auc_score, 
+    roc_curve, 
+    balanced_accuracy_score, 
     f1_score
 )
-# ============================
-# 2. Load dataset
-# ============================
-# Change this path according to your dataset location
-DATA_PATH = "../data/PARP1_Dataset.csv"
-# Dataset should contain:
-# SMILE  : molecular SMILES string
-# Class  : binary activity label (0/1)
-df = pd.read_csv(DATA_PATH,sep="\t")
-print(df.head())
-print("\nClass distribution:")
+
+# Cheminformatics (RDKit)
+from rdkit import Chem, DataStructs
+from rdkit.Chem import rdFingerprintGenerator
+# ==========================================
+# 1. Configuration and Helper Functions
+# ==========================================
+# Initialize Morgan fingerprint generator (Radius=2, Size=1024)
+morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
+
+def fp_as_array(mol):
+    """Convert RDKit molecule object to Morgan fingerprint as a numpy array."""
+    fp = morgan_gen.GetFingerprint(mol)
+    arr = np.zeros((1,), dtype=int)
+    DataStructs.ConvertToNumpyArray(fp, arr)
+    return arr
+
+def label_results(truth_list, pred_list):
+    """Classify prediction results into TN, FN, FP, TP based on truth and predicted labels."""
+    label_list = [["TN", "FN"], ["FP", "TP"]]
+    res = [] 
+    for truth, pred in zip(pred_list, truth_list):
+        res.append(label_list[truth][pred])
+    return res
+
+def safe_ratio(x, y):
+    """Safely calculate ratio to avoid division by zero, rounding to 2 decimal places."""
+    if (x + y) == 0:
+        return 0.0
+    return round(x / (x + y), 2)
+# ==========================================
+# 2. Data Loading and Molecular Fingerprint Calculation
+# ==========================================
+# Load dataset
+df = pd.read_csv("C:/HHB_project_ICR/PARP1_Perspective_Screening/ML_PARP1_projecrt_SPECS_ChemDiv/Manuscript_version/CCB/CCB_version/Submitted_version/Git_hub/PARP1_Dataset.csv", sep="\t")
+smiles_col = "SMILE"  # Column name containing SMILES
+
+# Print class distribution
+print("Class value counts:")
 print(df["Class"].value_counts())
-# SMILES column name
-SMILES_FIELD = "SMILE"
-# ============================
-# 3. Generate Morgan fingerprint
-# ============================
-# Morgan fingerprint parameters
-# radius=2 corresponds to ECFP4
-# fpSize=1024 means each molecule is represented by 1024 bits
-morgan_generator = rdFingerprintGenerator.GetMorganGenerator(radius=2,fpSize=1024)
-def fingerprint_to_array(molecule):
-    """
-    Convert RDKit fingerprint object
-    into numpy array.
-    """
-    fingerprint = morgan_generator.GetFingerprint(molecule)
-    array = np.zeros((1024,),dtype=int)
-    DataStructs.ConvertToNumpyArray(fingerprint,array)
-    return array
-# Convert SMILES into RDKit molecule object
-df["Mol"] = [Chem.MolFromSmiles(smiles) for smiles in df[SMILES_FIELD]]
-# Generate fingerprints
-df["Fingerprint"] = [fingerprint_to_array(mol) for mol in df["Mol"]]
-# ============================
-# 4. Model parameter optimization
-# ============================
-# Internal cross validation
-cv_strategy = StratifiedKFold(n_splits=5,shuffle=True,random_state=56)
-# Random Forest hyperparameter space
-RF_parameters = {
-    "param_grid": {
-        "n_estimators":[100,200,300,400],
-        "bootstrap":[False],
-        "max_features":["sqrt","log2",0.7],
-        "max_depth":[7,10,12,None],
-        "class_weight":["balanced"],
-        "min_samples_leaf":[1,3,5,10]
+
+# Convert SMILES to RDKit molecule objects and compute fingerprints
+df['Mol'] = [Chem.MolFromSmiles(x) for x in df[smiles_col]]
+df['fp'] = [fp_as_array(x) for x in df['Mol']]
+# ==========================================
+# 3. Cross-Validation and Hyperparameter Grid Search Configuration
+# ==========================================
+# 5-fold stratified cross-validation
+data_splitter_intern = StratifiedKFold(n_splits=5, shuffle=True, random_state=56)
+
+# Hyperparameter grid for Grid Search
+model_param_dict = {
+    'param_grid': {
+        'n_estimators': [100, 200, 300, 400], 
+        'bootstrap': [False],
+        'max_features': ["sqrt", "log2", 0.7], 
+        'max_depth': [7, 10, 12, None], 
+        'class_weight': ['balanced'],
+        'min_samples_leaf': [1, 3, 5, 10]
     },
-    "cv":cv_strategy,
-    "scoring":"balanced_accuracy",
-    "refit":True,
-    "n_jobs":-1
+    'cv': data_splitter_intern,
+    'scoring': "balanced_accuracy",
+    'refit': "balanced_accuracy",
+    'n_jobs': -1
 }
-# ============================
-# 5. Evaluation helper function
-# ============================
-def calculate_metrics(y_true,y_pred,y_probability):
-    """
-    Calculate model performance metrics.
-    """
-    return {
-        "MCC":matthews_corrcoef(y_true,y_pred),
-        "AUC":roc_auc_score(y_true,y_probability),
-        "Balanced_accuracy":balanced_accuracy_score(y_true,y_pred),
-        "F1_score":f1_score(y_true,y_pred)
-    }
-# ============================
-# 6. Model training loop
-# ============================
-all_results = []
-best_parameters = []
-prediction_details = []
-# Repeat 10 independent train-test splits
-for seed in tqdm(range(10),desc="Random Forest runs"):
-    print(
-        f"\nRunning seed {seed}"
+# ==========================================
+# 4. Model Training Loop
+# ==========================================
+stat_list = []
+detail_list = []
+pred_list = []
+prob_list = {}
+best_params_list = [] 
+
+for cycle in tqdm(range(8, 9)):  # Run model evaluation with specified random state(s)
+    # Split dataset into training and testing sets
+    train, test = train_test_split(df, test_size=0.3, random_state=cycle)
+    train_x, test_x = list(train.fp), list(test.fp)
+    train_y, test_y = train.Class, test.Class
+    
+    # Random Forest classifier with nested Grid Search
+    rf = GridSearchCV(
+        estimator=RandomForestClassifier(random_state=cycle), 
+        **model_param_dict,
+        verbose=10  # Set to 10 to output detailed search logs
     )
-    # Train/test split
-    train, test = train_test_split(df,test_size=0.3,random_state=seed,stratify=df["Class"])
-    X_train = list(train["Fingerprint"])
-    X_test = list(test["Fingerprint"])
-    y_train = train["Class"]
-    y_test = test["Class"]
-    # ============================
-    # Random Forest + GridSearch
-    # ============================
-    RF_model = GridSearchCV(estimator=RandomForestClassifier(random_state=seed),**RF_parameters,verbose=1)
-    # Train model
-    RF_model.fit(X_train,y_train)
-    # Prediction
-    prediction = RF_model.predict(X_test)
-    probability = RF_model.predict_proba(X_test)[:,1]
-    # Save best parameters
-    best_parameters.append(RF_model.best_params_)
-    # Metrics
-    metrics = calculate_metrics(y_test,prediction,probability)
-    metrics["seed"] = seed
-    all_results.append(metrics)
-    # Save molecule level prediction
-    for smiles,pred,true in zip(test[SMILES_FIELD],prediction,y_test):
-        prediction_details.append([seed,smiles,pred,true])
-# ============================
-# 7. Results summary
-# ============================
-results_df = pd.DataFrame(all_results)
-print("\nModel performance:")
-print(results_df)
-# Confusion matrix
-confusion_results = []
-for row in prediction_details:
-    seed = row[0]
-    pred = row[2]
-    true = row[3]
-    tn,fp,fn,tp = confusion_matrix(
-        [true],
-        [pred],
-        labels=[0,1]
-    ).ravel()
-    confusion_results.append([seed,tn,fp,fn,tp])
-confusion_df = pd.DataFrame(
-    confusion_results,
-    columns=["Seed","TN","FP","FN","TP"]
-)
-print("\nConfusion matrix:")
-print(confusion_df)
-# Save results
-results_df.to_csv(
-    "../results/RF_performance.csv",
-    index=False
-)
-confusion_df.to_csv("../results/RF_confusion_matrix.csv",index=False)
-print("\nFinished!")
+    
+    rf.fit(train_x, train_y)
+    best_params_list.append(rf.best_params_) 
+    
+    # Predict classes and get probabilities
+    pred = rf.predict(test_x) 
+    pred_list.append([pred, test_y])
+    
+    result_list = label_results(test_y, pred)
+    prob = rf.predict_proba(test_x)
+    
+    # Record predicted probabilities for Class 1 (positive)
+    prob_list[cycle] = [mol_prob[1] for mol_prob in prob]
+    
+    # Store detailed prediction details
+    for smiles, pred_val, true_val, result in zip(test[smiles_col], pred, test_y, result_list):
+        detail_list.append([cycle, smiles, pred_val, true_val, result])
+        
+    # Calculate evaluation metrics for the current run
+    stat_list.append({
+        'mcc': matthews_corrcoef(test_y, pred),  # Note: standardized as (y_true, y_pred)
+        'auc': roc_auc_score(test_y, prob[:, 1]), 
+        'bac': balanced_accuracy_score(test_y, pred),
+        'f1_score': f1_score(test_y, pred)
+    })
+# ==========================================
+# 5. Evaluation Metrics Summarization and Display
+# ==========================================
+row_list = []
+for p, t in pred_list:
+    # Reshape confusion matrix values (using predictions as rows, truth as columns to match original custom logic)
+    row_list.append(confusion_matrix(p, t).flatten())
+
+# Construct confusion matrix DataFrame
+confusion_df = pd.DataFrame(row_list, columns=["tn", "fn", "fp", "tp"])
+
+# Populate performance metrics
+confusion_df["MCC"] = [x['mcc'] for x in stat_list]
+confusion_df["AUC"] = [x['auc'] for x in stat_list]
+confusion_df["F1 score"] = [x['f1_score'] for x in stat_list]
+confusion_df["Balanced accuracy"] = [x['bac'] for x in stat_list]
+
+# Calculate Sensitivity (Recall) and Specificity (Selectivity)
+confusion_df["Recall_Sensitivity"] = [
+    safe_ratio(confusion_df.loc[i, "tp"], confusion_df.loc[i, "fn"]) 
+    for i in range(confusion_df.shape[0])
+]
+confusion_df["Specificity_Selectivity"] = [
+    safe_ratio(confusion_df.loc[i, "tn"], confusion_df.loc[i, "fp"]) 
+    for i in range(confusion_df.shape[0])
+]
+
+# Display the final performance table
+confusion_df
