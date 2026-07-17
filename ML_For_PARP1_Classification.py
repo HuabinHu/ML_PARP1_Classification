@@ -104,7 +104,7 @@ pred_list = []
 prob_list = {}
 best_params_list = [] 
 
-for cycle in tqdm(range(8, 9)):  # Run model evaluation with specified random state(s)
+for cycle in tqdm(range(0, 10)):  # Run model evaluation with specified random state(s)
     # Split dataset into training and testing sets
     train, test = train_test_split(df, test_size=0.3, random_state=cycle)
     train_x, test_x = list(train.fp), list(test.fp)
